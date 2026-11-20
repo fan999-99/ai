@@ -1148,89 +1148,264 @@ nav.solid{
   })();
 
   // ——— Background sound, on by default; resume on first gesture if needed ———
+  // Preview mix only: the same four tones, detune copies, noise buffer, and
+  // 1568 Hz shimmer. Modes change filtering and balance, not the notes.
+  // This is a listening-mode design demo, not an ANC simulation.
   (function(){
     const btn=document.getElementById('soundBtn');
     if(!btn) return;
     let sound=null, on=true, mode='quiet', userOff=false;
+    const MODES={
+      quiet:{
+        voices:[0.30,0.17,0.07,0.028],
+        detune:0.42,
+        dark:1.28, air:0, move:0, cine:0,
+        nLow:0.007, nHigh:0,
+        shimmer:0.0035,
+        width:0,
+        motion:0,
+        trem:0
+      },
+      aware:{
+        voices:[0.09,0.11,0.16,0.19],
+        detune:0.55,
+        dark:0, air:1.22, move:0, cine:0,
+        nLow:0.004, nHigh:0.036,
+        shimmer:0.015,
+        width:0.05,
+        motion:0,
+        trem:0
+      },
+      immersion:{
+        voices:[0.18,0.16,0.15,0.13],
+        detune:1.45,
+        dark:0, air:0, move:1.02, cine:0,
+        nLow:0.006, nHigh:0.011,
+        shimmer:0.016,
+        width:0.26,
+        motion:480,
+        trem:0.14
+      },
+      cinema:{
+        voices:[0.028,0.055,0.24,0.20],
+        detune:0.28,
+        dark:0, air:0, move:0, cine:1.55,
+        nLow:0.002, nHigh:0,
+        shimmer:0.001,
+        width:0.11,
+        motion:0,
+        trem:0
+      }
+    };
     const make=()=>{
-      const ac=new (window.AudioContext||window.webkitAudioContext)();
+      const AC=window.AudioContext||window.webkitAudioContext;
+      const ac=new AC();
       const master=ac.createGain();
       master.gain.value=0;
       master.connect(ac.destination);
-      const lp=ac.createBiquadFilter();
-      lp.type='lowpass'; lp.frequency.value=640; lp.Q.value=0.65;
-      const pad=ac.createGain(); pad.gain.value=0.22;
-      pad.connect(lp).connect(master);
+      const dry=ac.createGain();
+      dry.gain.value=1;
+      const pad=ac.createGain();
+      pad.gain.value=0.22;
       const freqs=[110,164.81,220,329.63];
-      freqs.forEach((f,i)=>{
-        const o=ac.createOscillator(); o.type=i%2?'triangle':'sine'; o.frequency.value=f;
-        const g=ac.createGain(); g.gain.value=0.2/(i+1);
-        o.connect(g).connect(pad); o.start();
-        const o2=ac.createOscillator(); o2.type='sine'; o2.frequency.value=f*1.0035;
-        const g2=ac.createGain(); g2.gain.value=0.07/(i+1);
-        o2.connect(g2).connect(pad); o2.start();
+      const baseDet=[0.07,0.035,0.023,0.0175];
+      const voices=freqs.map((f,i)=>{
+        const o=ac.createOscillator();
+        o.type=i%2?'triangle':'sine';
+        o.frequency.value=f;
+        const g=ac.createGain();
+        g.gain.value=0.0001;
+        o.connect(g).connect(dry);
+        o.start();
+        const o2=ac.createOscillator();
+        o2.type='sine';
+        o2.frequency.value=f*1.0035;
+        const g2=ac.createGain();
+        g2.gain.value=0.0001;
+        o2.connect(g2).connect(dry);
+        o2.start();
+        return {g,g2};
       });
+      dry.connect(pad);
+      const color=ac.createGain();
+      color.gain.value=1;
+      const gDark=ac.createGain(); gDark.gain.value=0;
+      const gAir=ac.createGain(); gAir.gain.value=0;
+      const gMove=ac.createGain(); gMove.gain.value=0;
+      const gCine=ac.createGain(); gCine.gain.value=0;
+      const lpDark=ac.createBiquadFilter();
+      lpDark.type='lowpass'; lpDark.frequency.value=380; lpDark.Q.value=0.62;
+      pad.connect(lpDark).connect(gDark).connect(color);
+      const hpAir=ac.createBiquadFilter();
+      hpAir.type='highpass'; hpAir.frequency.value=280; hpAir.Q.value=0.65;
+      const lpAir=ac.createBiquadFilter();
+      lpAir.type='lowpass'; lpAir.frequency.value=3800; lpAir.Q.value=0.45;
+      pad.connect(hpAir).connect(lpAir).connect(gAir).connect(color);
+      const lpMove=ac.createBiquadFilter();
+      lpMove.type='lowpass'; lpMove.frequency.value=2200; lpMove.Q.value=0.5;
+      const trem=ac.createGain(); trem.gain.value=1;
+      pad.connect(lpMove).connect(gMove).connect(trem).connect(color);
+      const shelf=ac.createBiquadFilter();
+      shelf.type='lowshelf'; shelf.frequency.value=260; shelf.gain.value=-11;
+      const presence=ac.createBiquadFilter();
+      presence.type='peaking'; presence.frequency.value=1250; presence.Q.value=0.9; presence.gain.value=8;
+      const lpCine=ac.createBiquadFilter();
+      lpCine.type='lowpass'; lpCine.frequency.value=2600; lpCine.Q.value=0.5;
+      pad.connect(shelf).connect(presence).connect(lpCine).connect(gCine).connect(color);
+      color.connect(master);
+      const width=ac.createGain();
+      width.gain.value=0;
+      let stereo=false;
+      try{
+        if((ac.destination.maxChannelCount||1)>=2 && typeof ac.createStereoPanner==='function'){
+          stereo=true;
+          color.connect(width);
+          const dL=ac.createDelay(0.05); dL.delayTime.value=0.012;
+          const dR=ac.createDelay(0.05); dR.delayTime.value=0.018;
+          const pL=ac.createStereoPanner(); pL.pan.value=-0.85;
+          const pR=ac.createStereoPanner(); pR.pan.value=0.85;
+          width.connect(dL).connect(pL).connect(master);
+          width.connect(dR).connect(pR).connect(master);
+        }
+      }catch(err){ stereo=false; }
+      const lfo=ac.createOscillator();
+      lfo.frequency.value=0.22;
+      const lfoGain=ac.createGain();
+      lfoGain.gain.value=0;
+      lfo.connect(lfoGain);
+      lfoGain.connect(lpMove.frequency);
+      const tremDepth=ac.createGain();
+      tremDepth.gain.value=0;
+      lfo.connect(tremDepth);
+      tremDepth.connect(trem.gain);
+      lfo.start();
       const buf=ac.createBuffer(1, ac.sampleRate*2, ac.sampleRate);
       const data=buf.getChannelData(0);
       for(let i=0;i<data.length;i++) data[i]=Math.random()*2-1;
-      const noise=ac.createBufferSource(); noise.buffer=buf; noise.loop=true;
-      const bp=ac.createBiquadFilter(); bp.type='bandpass'; bp.frequency.value=900; bp.Q.value=0.45;
-      const ng=ac.createGain(); ng.gain.value=0.02;
-      noise.connect(bp).connect(ng).connect(master); noise.start();
-      const sh=ac.createOscillator(); sh.type='sine'; sh.frequency.value=1568;
-      const shg=ac.createGain(); shg.gain.value=0.01;
-      sh.connect(shg).connect(master); sh.start();
-      const apply=(m,quick)=>{
+      const noise=ac.createBufferSource();
+      noise.buffer=buf; noise.loop=true;
+      const bpLow=ac.createBiquadFilter();
+      bpLow.type='bandpass'; bpLow.frequency.value=440; bpLow.Q.value=0.55;
+      const bpHigh=ac.createBiquadFilter();
+      bpHigh.type='bandpass'; bpHigh.frequency.value=2000; bpHigh.Q.value=0.48;
+      const nLow=ac.createGain(); nLow.gain.value=0;
+      const nHigh=ac.createGain(); nHigh.gain.value=0;
+      noise.connect(bpLow).connect(nLow).connect(master);
+      noise.connect(bpHigh).connect(nHigh).connect(master);
+      noise.start();
+      const sh=ac.createOscillator();
+      sh.type='sine'; sh.frequency.value=1568;
+      const shg=ac.createGain(); shg.gain.value=0;
+      sh.connect(shg).connect(master);
+      sh.start();
+      const analyser=ac.createAnalyser();
+      analyser.fftSize=2048;
+      analyser.smoothingTimeConstant=0.12;
+      master.connect(analyser);
+      const apply=(m)=>{
+        const spec=MODES[m]||MODES.quiet;
         const now=ac.currentTime;
-        const t=quick?0.2:0.9;
-        const table={
-          quiet:{lp:520, n:0.012, pad:0.22, sh:0.008, master:0.11},
-          aware:{lp:2400, n:0.045, pad:0.18, sh:0.014, master:0.13},
-          immersion:{lp:1400, n:0.018, pad:0.26, sh:0.016, master:0.14},
-          cinema:{lp:980, n:0.01, pad:0.2, sh:0.006, master:0.12}
-        }[m]||{lp:700,n:0.02,pad:0.2,sh:0.01,master:0.12};
-        lp.frequency.setTargetAtTime(table.lp, now, t);
-        ng.gain.setTargetAtTime(table.n, now, t);
-        pad.gain.setTargetAtTime(table.pad, now, t);
-        shg.gain.setTargetAtTime(table.sh, now, t);
-        if(on) master.gain.setTargetAtTime(table.master, now, t);
+        const k=0.11;
+        voices.forEach((v,i)=>{
+          v.g.gain.setTargetAtTime(spec.voices[i], now, k);
+          v.g2.gain.setTargetAtTime(baseDet[i]*spec.detune, now, k);
+        });
+        gDark.gain.setTargetAtTime(spec.dark, now, k);
+        gAir.gain.setTargetAtTime(spec.air, now, k);
+        gMove.gain.setTargetAtTime(spec.move, now, k);
+        gCine.gain.setTargetAtTime(spec.cine, now, k);
+        nLow.gain.setTargetAtTime(spec.nLow, now, k);
+        nHigh.gain.setTargetAtTime(spec.nHigh, now, k);
+        shg.gain.setTargetAtTime(spec.shimmer, now, k);
+        width.gain.setTargetAtTime(stereo?spec.width:0, now, k);
+        lfoGain.gain.setTargetAtTime(spec.motion||0, now, 0.16);
+        tremDepth.gain.setTargetAtTime(spec.trem||0, now, 0.16);
       };
-      return {ac, master, apply, fade(v,s=0.4){ master.gain.setTargetAtTime(v, ac.currentTime, s); }};
+      return {
+        ac, master, analyser, apply,
+        fade(v,s){ master.gain.setTargetAtTime(v, ac.currentTime, s); }
+      };
+    };
+    const paint=(playing)=>{
+      btn.setAttribute('aria-pressed', playing?'true':'false');
+      btn.setAttribute('aria-label', playing?'关闭背景声':'开启背景声');
     };
     const start=async()=>{
+      if(userOff) return;
       if(!sound) sound=make();
-      if(sound.ac.state==='suspended') await sound.ac.resume();
+      if(sound.ac.state==='suspended'){
+        try{ await sound.ac.resume(); }catch(err){}
+      }
       on=true;
-      sound.apply(mode,true);
-      sound.fade(0.12,0.3);
-      btn.setAttribute('aria-pressed','true');
-      btn.setAttribute('aria-label','关闭背景声');
+      sound.apply(mode);
+      sound.fade(0.13, 0.26);
+      paint(true);
     };
     const stop=()=>{
-      if(!sound) return;
       on=false;
-      sound.fade(0,0.25);
-      btn.setAttribute('aria-pressed','false');
-      btn.setAttribute('aria-label','开启背景声');
+      if(sound) sound.fade(0, 0.09);
+      paint(false);
     };
     btn.addEventListener('click',()=>{
       if(on){ userOff=true; stop(); }
       else { userOff=false; start(); }
     });
-    const unlock=()=>{ if(on && !userOff) start(); };
-    ['pointerdown','keydown','touchstart'].forEach(ev=>{
-      window.addEventListener(ev,unlock,{once:true,passive:true});
+    const unlockEvents=['pointerdown','keydown','touchstart'];
+    const unlock=(ev)=>{
+      const raw=ev&&ev.target;
+      const el=raw&&raw.nodeType===1?raw:(raw&&raw.parentElement);
+      if(el&&el.closest&&el.closest('#soundBtn')) return;
+      unlockEvents.forEach(name=>window.removeEventListener(name, unlock, true));
+      if(!userOff) start();
+    };
+    unlockEvents.forEach(name=>window.addEventListener(name, unlock, {capture:true, passive:true}));
+    document.addEventListener('visibilitychange',()=>{
+      if(document.visibilityState==='visible' && !userOff) start();
+    });
+    window.addEventListener('pageshow',()=>{
+      if(!userOff) start();
     });
     start().catch(()=>{});
-    window._setListenMode=(m)=>{ mode=m; if(sound) sound.apply(m,false); };
-    window._nudgeSound=(nx)=>{
-      if(!sound||!on) return;
-      // gentle stereo-less brightness follow
-      const now=sound.ac.currentTime;
-      // no-op if too chatty; leave for future
+    window._setListenMode=(m)=>{
+      if(!MODES[m]) return;
+      mode=m;
+      if(sound) sound.apply(m);
+    };
+    window._nudgeSound=()=>{};
+    window._previewListen={
+      get mode(){ return mode; },
+      get on(){ return on; },
+      get userOff(){ return userOff; },
+      state(){ return sound?sound.ac.state:'none'; },
+      async suspend(){ if(sound&&sound.ac.state==='running') await sound.ac.suspend(); },
+      sample(){
+        if(!sound) return null;
+        const a=sound.analyser;
+        const freq=new Uint8Array(a.frequencyBinCount);
+        const time=new Uint8Array(a.fftSize);
+        a.getByteFrequencyData(freq);
+        a.getByteTimeDomainData(time);
+        const nyq=sound.ac.sampleRate/2;
+        let low=0,mid=0,high=0,nL=0,nM=0,nH=0,centN=0,centD=0,peak=0;
+        for(let i=0;i<freq.length;i++){
+          const f=i*nyq/freq.length, v=freq[i];
+          centN+=f*v; centD+=v;
+          if(f<280){ low+=v; nL++; }
+          else if(f<1800){ mid+=v; nM++; }
+          else { high+=v; nH++; }
+        }
+        for(let i=0;i<time.length;i++) peak=Math.max(peak, Math.abs(time[i]-128));
+        return {
+          state:sound.ac.state,
+          peak,
+          low:nL?low/nL:0,
+          mid:nM?mid/nM:0,
+          high:nH?high/nH:0,
+          centroid:centD?centN/centD:0
+        };
+      }
     };
   })();
-
 
   window.addEventListener('scroll',onScroll,{passive:true});
   onScroll();
